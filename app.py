@@ -105,11 +105,9 @@ def classify_jodi_digit_type(jodi):
         return "num_four_mix"
     return "normal"
 
-
 def render_jodi_box(jodis, passed_set=None):
     if not jodis: return "<p>Pending / N/A</p>"
     if passed_set is None: passed_set = set()
-    # छोटे बॉक्स, बोल्ड टेक्स्ट, एक लाइन‑जैसा दिखे
     html = "<div style='display: flex; flex-wrap: wrap; gap: 4px; padding: 2px; line-height: 1;'>"
     for jodi in sorted(list(jodis)):
         if jodi in passed_set:
@@ -129,10 +127,10 @@ def generate_pool(df, target_shift, idx, src_cols, day_type, max_history=1500):
     elif day_type == "T3":
         s_idx = idx - 3
     else:
-        return set()
+        return set(), set()
 
     if s_idx < 0:
-        return set()
+        return set(), set()
 
     start_hist = max(0, idx - max_history)
     hist = {p: 0 for p in PATTERNS_32}
@@ -158,7 +156,7 @@ def generate_pool(df, target_shift, idx, src_cols, day_type, max_history=1500):
                         yest_worked[w] += 1
     exhausted = set(p for p, c in yest_worked.items() if c >= 2)
 
-    return dead_patterns, exhausted   # यह नीचे advanced‑pattern rule में इस्तेमाल करें
+    return dead_patterns, exhausted
 
 
 if uploaded_file is not None:
@@ -191,12 +189,11 @@ if uploaded_file is not None:
             st.info(f"**{target_shift}** shift ke numbers zyada tar **{winner_day}** ke patterns se bante hain; engine ne '{winner_day}' ko choose kiya hai.")
 
 
-            # ====== Step 1: T1 / T2 / T3 base patterns + behaviour study ======
-            with st.spinner("T1 / T2 / T3 base pools + pattern-behaviour rules generate kar rahi hai..."):
+            with st.spinner("T1 / T2 / T3 + pattern‑behaviour rules generate kar rahi hai..."):
                 pattern_history = defaultdict(list)   # { (date, shift): list_of_patterns }
                 pattern_after_map = defaultdict(Counter)  # { (type, shift) : pattern -> count }
 
-                # 7‑साल के लिए pattern‑behaviour पहले से record कर लेते हैं
+                # 7‑साल के लिए pattern‑behaviour पहले से record कर लें
                 for i in range(1, len(df)):
                     for col in cols:
                         val = get_val_str(df.iloc[i][col])
@@ -220,7 +217,7 @@ if uploaded_file is not None:
                     base_dead.update(d)
                     base_exhausted.update(e)
 
-                # आज की जोड़ी का type / digit‑type देखें (actual या अगर न हो तो last)
+                # आज की जोड़ी का type / digit‑type देखें
                 jodi_t = df.iloc[idx_aaj][target_shift]
                 if pd.isna(jodi_t) and idx_aaj - 1 >= 0:
                     jodi_t = df.iloc[idx_aaj-1][target_shift]
@@ -228,11 +225,10 @@ if uploaded_file is not None:
                 j_type_today = classify_jodi_type(jodi_t) if jodi_t else "other"
                 d_type_today = classify_jodi_digit_type(jodi_t) if jodi_t else "other"
 
-                # जो patterns आज के type में ज़्यादा बार आए, उन्हें favour करेंगे
                 fav_patterns = set(p for p, c in pattern_after_map[(j_type_today, target_shift)].items() if c > 10)
                 fav_num_patterns = set(p for p, c in pattern_after_map[(d_type_today, target_shift)].items() if c > 8)
 
-                # कल / दो दिन पहले आए patterns को थोड़ा avoid‑score
+                # कल / दो दिन पहले आए patterns को avoid‑score
                 avoid_patterns = set()
                 if idx_kal >= 0:
                     for p in pattern_history.get((df.iloc[idx_kal]['DATE'], target_shift), []):
@@ -241,11 +237,10 @@ if uploaded_file is not None:
                     for p in pattern_history.get((df.iloc[idx_parson]['DATE'], target_shift), []):
                         avoid_patterns.add(p)
 
-                # ====== Step 2: numerology + pattern‑score मिलाने वाला active‑patterns और pool ======
+                # ====== pattern‑based active‑patterns निकालें ======
                 active = []
                 for p in PATTERNS_32:
                     score = 1.0
-
                     if p in base_dead:
                         score -= 1.5
                     if p in base_exhausted:
@@ -256,16 +251,18 @@ if uploaded_file is not None:
                         score += 1.2
                     if p in fav_num_patterns:
                         score += 1.0
-
                     if score > 0.5:
                         active.append(p)
 
+                # base‑pool बनाएँ
                 base_pool = set()
                 for src in best_sources:
                     if idx_kal < len(df):
-                        applied = apply_strict_patterns(df.iloc[idx_kal][src], active)
-                        for j in applied:
-                            base_pool.add(j)
+                        vs = get_val_str(df.iloc[idx_kal][src])
+                        if vs:
+                            applied = apply_strict_patterns(vs, active)
+                            for j in applied:
+                                base_pool.add(j)
 
                 # numerology expansion
                 numerology_expanded = set()
@@ -274,7 +271,7 @@ if uploaded_file is not None:
                         expanded = expand_jodi_by_numerology(j)
                         numerology_expanded.update(expanded)
 
-                # frequency‑based trust (shift‑wise history)
+                # frequency‑based trust
                 freq_hist = Counter()
                 start = max(0, idx_aaj - 1000)
                 for i in range(start, idx_aaj):
@@ -284,21 +281,21 @@ if uploaded_file is not None:
 
                 final_score = defaultdict(float)
                 for j in numerology_expanded:
-                    # pattern‑based preference देखें
+                    # pattern‑based preference
                     j_type = classify_jodi_type(j)
                     d_type = classify_jodi_digit_type(j)
+                    p_score = 0.0
+                    if j_type in ['double', 'forward_count', 'reverse_count']:
+                        p_score += 0.5
+                    if d_type in ['num_zero_mix', 'double_zero']:
+                        p_score += 0.5
+                    if d_type == 'num_four_mix':
+                        p_score += 0.5
 
-                    pattern_g = get_worked(df.iloc[idx_kal][src] if src in df.columns else "", j)  # nearest pattern
-                    if pattern_g:
-                        p0 = pattern_g[0]
-                        if p0 in fav_patterns:
-                            final_score[j] += 1.5
-                        if p0 in fav_num_patterns:
-                            final_score[j] += 1.0
-                        if p0 in avoid_patterns:
-                            final_score[j] -= 1.0
+                    # basic score
+                    final_score[j] = 1.0 + p_score
 
-                    # frequency‑bonus
+                    # frequency‑adjustment
                     if j in freq_hist:
                         cnt = freq_hist[j]
                         if cnt < 5:
@@ -314,6 +311,20 @@ if uploaded_file is not None:
 
                 sorted_final = sorted(final_score.items(), key=lambda x: -x[1])
                 top_30 = [j for j, _ in sorted_final[:30]]
-                top_10 = [j for j, _ in sorted_final[:15]]   # ज़्यादा compact रखने लिए 15 तक
+                top_15 = [j for j, _ in sorted_final[:15]]
 
-            # ====== UI – एक
+            # ====== UI – एक ही पेज पर छोटा, बोल्ड display ======
+            if top_30:
+                st.write(f"**T1/T2/T3 + Numerology + Pattern‑Logic से निकली हुई top‑30 जोड़ियाँ**")
+                st.markdown(f"**Top‑15 Prediction (Recommended for Play):** {', '.join(top_15)}", unsafe_allow_html=True)
+                st.markdown("<h4>Prediction Box (Top‑30)</h4>", unsafe_allow_html=True)
+                st.markdown(render_jodi_box(top_30, passed_set=aaj_actual), unsafe_allow_html=True)
+
+            # ====== 7‑Saal backtest (optional) ======
+            if st.checkbox("7‑Saal ka backtest dekhna hai?"):
+                with st.spinner("7‑Saal backtest process kar rahi hai..."):
+                    backtest_results = []
+                    for m in df['DATE'].dt.to_period('M').unique():
+                        df_m = df[df['DATE'].dt.to_period('M') == m]
+                        for shift in cols:
+                            hits_top30,
