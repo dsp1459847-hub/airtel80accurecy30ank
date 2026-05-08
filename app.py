@@ -101,11 +101,6 @@ def expand_jodi_by_numerology(jodi):
     return list(set(res))
 
 def render_jodi_box(jodis, actual_set=None, pred_set=None):
-    """
-    - jodis: list of jodis for a row.
-    - actual_set: जो हरे डब्बे में दिखेंगे (आज का actual)
-    - pred_set: जो prediction list में जोड़ी है और actual हो तो हरा डब्बा
-    """
     if not jodis:
         return "<p>–</p>"
     if actual_set is None:
@@ -116,21 +111,17 @@ def render_jodi_box(jodis, actual_set=None, pred_set=None):
     html = "<div style='display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; line-height: 1;'>"
     for jodi in sorted(list(jodis)):
         if jodi in actual_set or jodi in pred_set:
-            # हरा डब्बा: यह actual बना या प्रेडिक्शन में actual आया
             html += f"<span style='background:#28a745; color:#fff; padding:0 4px; border-radius:3px; border:1px solid #155724; font-size:11px; font-weight:bold;'>{jodi}</span>"
         else:
-            # सिर्फ अंक दिखाएँ, बिना हरा डब्बा, बस हल्का मोड (italic)
             html += f"<span style='background:#fff; color:#000; padding:0 4px; border-radius:3px; border:1px solid #ddd; font-size:11px; font-weight:bold; font-style:italic;'>{jodi}</span>"
     html += "</div>"
     return html
 
-
-# numerical/weekday‑based छोटे‑छोटे helpers
 def get_day_num(dt):
     return dt.day
 
 def get_weekday(dt):
-    return dt.weekday()  # 0=Monday, 6=Sunday
+    return dt.weekday()
 
 
 if uploaded_file is not None:
@@ -149,7 +140,6 @@ if uploaded_file is not None:
     selected_date = st.date_input("Aaj ki tareekh:", value=max_valid_date)
     sel_date_pd = pd.to_datetime(selected_date)
 
-    # आज की row
     date_match = df[df['DATE'] == sel_date_pd]
     if not date_match.empty:
         idx_aaj = date_match.index[0]
@@ -167,14 +157,14 @@ if uploaded_file is not None:
 
 
         # ========================
-        # 1. SERIAL‑DATE HISTORY: पिछले 11 दिन + आज (sirf 11 rows)
+        # 1. SERIAL‑DATE HISTORY: पिछले 11 दिन + आज
         # ========================
         NUM_SERIAL_DAYS = 11
         if idx_aaj >= NUM_SERIAL_DAYS:
             serial_start = idx_aaj - NUM_SERIAL_DAYS
         else:
             serial_start = 0
-        serial_df = df.iloc[serial_start:idx_aaj + 1]   # पिछले 11 + आज
+        serial_df = df.iloc[serial_start:idx_aaj + 1]
 
         st.markdown("### 📅 (1) Last 11 Days History (Serial Date‑Wise)")
         for _, row in serial_df.iterrows():
@@ -186,17 +176,16 @@ if uploaded_file is not None:
                     jodis.append(j)
 
             actual_set = set(jodis) if row['DATE'] == sel_date_pd else set()
-            pred_set = aaj_actual.intersection(set(jodis))   # अगर यही दिन है और prediction में आया
-
+            pred_set = aaj_actual.intersection(set(jodis))
             html_line = f"<div style='margin-bottom:2px; font-size:12px;'><b>{date_txt}</b> &nbsp;</div>"
             html_line += render_jodi_box(jodis, actual_set=actual_set, pred_set=pred_set)
             st.markdown(html_line, unsafe_allow_html=True)
 
 
         # ========================
-        # 2. WEEK‑DAY‑WISE HISTORY: पिछले 11 बार वही दिन + आज (sirf 12 rows)
+        # 2. WEEK‑DAY‑WISE HISTORY: पिछले 11 बार वही दिन + आज
         # ========================
-        today_weekday = sel_date_pd.weekday()
+        today_weekday = get_weekday(sel_date_pd)
         weekday_df = df[df['DATE'].dt.weekday == today_weekday]
         weekday_df = weekday_df[weekday_df['DATE'] <= sel_date_pd].copy()
         if len(weekday_df) > 12:
@@ -244,10 +233,10 @@ if uploaded_file is not None:
 
 
         # ========================
-        # PRODUCTION‑BASED PREDICTION (Top‑30 / Top‑15) + जो आया हो वह हरा दिखाएँ
+        # PRODUCTION‑BASED PREDICTION (Top‑30 / Top‑15)
         # ========================
         with st.spinner("T1 / T2 / T3 + Numerology + Pattern‑Logic generate kar rahi hai..."):
-            # आज के लिए small window‑based pattern
+            # आज के लिए small pattern record
             window = 11
             start = max(0, idx_aaj - window)
             pattern_after_map = defaultdict(Counter)
@@ -265,4 +254,70 @@ if uploaded_file is not None:
                     worked = get_worked(prev_val, val)
                     for p in worked:
                         pattern_after_map[(j_type, col)][p] += 1
-                        pattern_after_map[(d_type, col)][p
+                        pattern_after_map[(d_type, col)][p] += 1
+
+            # आज की जोड़ी का type / digit‑type
+            jodi_t = date_match.iloc[0][target_shift]
+            jodi_t = get_val_str(jodi_t)
+            j_type_today = classify_jodi_type(jodi_t) if jodi_t else "other"
+            d_type_today = classify_jodi_digit_type(jodi_t) if jodi_t else "other"
+
+            fav_patterns = set(p for p, c in pattern_after_map[(j_type_today, target_shift)].items() if c > 5)
+            fav_num_patterns = set(p for p, c in pattern_after_map[(d_type_today, target_shift)].items() if c > 5)
+
+            # base pattern score
+            final_pscore = defaultdict(float)
+            for p in PATTERNS_32:
+                s = 1.0
+                if p in fav_patterns:
+                    s += 1.0
+                if p in fav_num_patterns:
+                    s += 0.8
+                final_pscore[p] = s
+
+            # numerology + pattern‑joined pool
+            base_pool = set()
+            for src in best_sources:
+                vs = get_val_str(df.iloc[idx_aaj - 1][src]) if idx_aaj - 1 >= 0 else ""
+                if vs:
+                    applied = apply_strict_patterns(vs, PATTERNS_32)
+                    for j in applied:
+                        base_pool.add(j)
+
+            # numerology expansion
+            numerology_expanded = set()
+            for j in base_pool:
+                if j and len(j) == 2:
+                    expanded = expand_jodi_by_numerology(j)
+                    numerology_expanded.update(expanded)
+
+            # frequency‑score
+            freq_hist = Counter()
+            f_start = max(0, idx_aaj - window)
+            for i in range(f_start, idx_aaj):
+                val = get_val_str(df.iloc[i][target_shift])
+                if val:
+                    freq_hist[val] += 1
+
+            final_score = defaultdict(float)
+            for j in numerology_expanded:
+                final_score[j] = 1.0
+                if j in freq_hist:
+                    cnt = freq_hist[j]
+                    if cnt < 3:
+                        freq_mult = 0.8
+                    elif cnt < 8:
+                        freq_mult = 1.0
+                    else:
+                        freq_mult = 1.2
+                else:
+                    freq_mult = 1.0
+                final_score[j] *= freq_mult
+
+            sorted_final = sorted(final_score.items(), key=lambda x: -x[1])
+            top_30 = [j for j, _ in sorted_final[:30]]
+            top_15 = [j for j, _ in sorted_final[:15]]
+
+            st.write("### 🎯 Final Top‑30 Jodi (Numerology + Pattern‑Logic)")
+            st.write(f"**Top‑15 Prediction (Recommended):** {', '.join(top_15[:10])}")
+            st.markdown(render_jodi_box(top_30, actual_set=aaj_actual, pred_set=aaj_actual), unsafe_allow_html=True)
