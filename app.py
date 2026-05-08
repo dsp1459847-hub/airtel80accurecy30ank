@@ -205,4 +205,148 @@ if uploaded_file is not None:
                         pattern_after_map[(j_type, col)][p] += 1
                         pattern_after_map[(d_type, col)][p] += 1
 
-            base_dead, base_exhausted =
+            base_dead, base_exhausted = set(), set()
+            for d_type in ['T1','T2','T3']:
+                d, e = generate_pool(df, target_shift, idx_aaj, best_sources, d_type)
+                base_dead.update(d)
+                base_exhausted.update(e)
+
+            jodi_t = df.iloc[idx_aaj][target_shift]
+            if pd.isna(jodi_t) and idx_aaj - 1 >= 0:
+                jodi_t = df.iloc[idx_aaj-1][target_shift]
+            jodi_t = get_val_str(jodi_t)
+            j_type_today = classify_jodi_type(jodi_t) if jodi_t else "other"
+            d_type_today = classify_jodi_digit_type(jodi_t) if jodi_t else "other"
+
+            fav_patterns = set(p for p, c in pattern_after_map[(j_type_today, target_shift)].items() if c > 10)
+            fav_num_patterns = set(p for p, c in pattern_after_map[(d_type_today, target_shift)].items() if c > 8)
+
+            avoid_patterns = set()
+            if idx_kal >= 0:
+                for p in pattern_history.get((df.iloc[idx_kal]['DATE'], target_shift), []):
+                    avoid_patterns.add(p)
+            if idx_parson >= 0:
+                for p in pattern_history.get((df.iloc[idx_parson]['DATE'], target_shift), []):
+                    avoid_patterns.add(p)
+
+            active = []
+            for p in PATTERNS_32:
+                score = 1.0
+                if p in base_dead:
+                    score -= 1.5
+                if p in base_exhausted:
+                    score -= 0.8
+                if p in avoid_patterns:
+                    score -= 0.5
+                if p in fav_patterns:
+                    score += 1.2
+                if p in fav_num_patterns:
+                    score += 1.0
+                if score > 0.5:
+                    active.append(p)
+
+            base_pool = set()
+            for src in best_sources:
+                if idx_kal < len(df):
+                    vs = get_val_str(df.iloc[idx_kal][src])
+                    if vs:
+                        applied = apply_strict_patterns(vs, active)
+                        for j in applied:
+                            base_pool.add(j)
+
+            numerology_expanded = set()
+            for j in base_pool:
+                if j and len(j) == 2:
+                    expanded = expand_jodi_by_numerology(j)
+                    numerology_expanded.update(expanded)
+
+            freq_hist = Counter()
+            start = max(0, idx_aaj - 1000)
+            for i in range(start, idx_aaj):
+                val = df.iloc[i][target_shift]
+                if val:
+                    freq_hist[val] += 1
+
+            final_score = defaultdict(float)
+            for j in numerology_expanded:
+                final_score[j] = 1.0
+                if j in freq_hist:
+                    cnt = freq_hist[j]
+                    if cnt < 5:
+                        freq_mult = 0.8
+                    elif cnt < 15:
+                        freq_mult = 1.0
+                    else:
+                        freq_mult = 1.2
+                else:
+                    freq_mult = 1.0
+                final_score[j] *= freq_mult
+
+            sorted_final = sorted(final_score.items(), key=lambda x: -x[1])
+            top_30 = [j for j, _ in sorted_final[:30]]
+            top_15 = [j for j, _ in sorted_final[:15]]
+
+            st.write("### 🎯 Final Top‑30 Jodi (Numerology + Pattern‑Logic)")
+            st.write(f"**Top‑15 Prediction (Recommended):** {', '.join(top_15[:10])}")
+            st.markdown(render_jodi_box(top_30, passed_set=aaj_actual), unsafe_allow_html=True)
+
+        # 7‑Saal backtest
+        if st.checkbox("7‑Saal ka backtest dekhna hai?"):
+            with st.spinner("7‑Saal backtest process kar rahi hai..."):
+                backtest_results = []
+                for m in df['DATE'].dt.to_period('M').unique():
+                    df_m = df[df['DATE'].dt.to_period('M') == m]
+                    for shift in cols:
+                        hits_top30, total30 = 0, 0
+                        for i in range(max(4, len(df_m)-1000), len(df_m)):
+                            sel_row = df_m.iloc[i]
+                            actual = get_val_str(sel_row[shift])
+                            if not actual: continue
+                            total30 += 1
+
+                            d, e = generate_pool(df_m, shift, i, best_sources, "T1")
+                            base_dead_b, base_exhausted_b = set(d), set(e)
+                            for dd_type in ["T2","T3"]:
+                                d_alt, e_alt = generate_pool(df_m, shift, i, best_sources, dd_type)
+                                base_dead_b.update(d_alt)
+                                base_exhausted_b.update(e_alt)
+
+                            active_b = []
+                            for p in PATTERNS_32:
+                                score = 1.0
+                                if p in base_dead_b:
+                                    score -= 1.5
+                                if p in base_exhausted_b:
+                                    score -= 0.8
+                                if score > 0.5:
+                                    active_b.append(p)
+
+                            base_pool_b = set()
+                            for src_b in best_sources:
+                                if i > 0 and src_b in df_m.columns:
+                                    vs_b = get_val_str(df_m.iloc[i-1][src_b])
+                                    if vs_b:
+                                        applied_b = apply_strict_patterns(vs_b, active_b)
+                                        for j in applied_b:
+                                            base_pool_b.add(j)
+
+                            numerology_b = set()
+                            for j in base_pool_b:
+                                if j and len(j) == 2:
+                                    expanded = expand_jodi_by_numerology(j)
+                                    numerology_b.update(expanded)
+
+                            sorted_b = sorted([(j, 1.0) for j in numerology_b], key=lambda x: -x[1])
+                            top30_b = [j for j, _ in sorted_b[:30]]
+                            if actual in top30_b:
+                                hits_top30 += 1
+
+                        if total30 > 0:
+                            acc30 = hits_top30 / total30 * 100
+                            backtest_results.append({'Month': str(m), 'Shift': shift, 'Acc‑30': acc30})
+
+                back_df = pd.DataFrame(backtest_results)
+                st.write("### 📊 7‑Saal ka Backtest: Top‑30 Accuracy (Approx.)")
+                st.dataframe(back_df, height=200)
+                if not back_df.empty:
+                    avg_acc30 = back_df['Acc‑30'].mean
